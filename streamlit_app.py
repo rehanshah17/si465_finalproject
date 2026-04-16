@@ -3,7 +3,6 @@ import os
 import folium
 import numpy as np
 import pandas as pd
-import plotly.express as px
 import requests
 import streamlit as st
 from dotenv import load_dotenv
@@ -13,7 +12,7 @@ from streamlit_folium import st_folium
 from firms import fetch_firms_data
 from landsat import fetch_landsat_features
 from pipeliner import (
-    RES, TARGET, WEATHER_COLS, SAT_COLS,
+    RES, TARGET, WEATHER_COLS,
     agg_firms, agg_power, agg_landsat,
     build_dataset, run_models,
 )
@@ -197,42 +196,42 @@ if results.empty:
     st.warning("Not enough data to run models.")
     st.stop()
 
-results = results.sort_values("r2_mean", ascending=False).reset_index(drop=True)
+results = results.sort_values("mse_mean", ascending=True).reset_index(drop=True)
 baseline_mse = float(np.mean((df[TARGET].values - df[TARGET].mean()) ** 2))
 best = results.iloc[0]
 
 st.success(
     f"Best: **{best['model']}** on **{best['features']}** "
     f"{'(uses PCA)' if best['uses_pca'] else '(no PCA)'} — "
-    f"R² {best['r2_mean']:.3f},  MSE {best['mse_mean']:.2f}"
+    f"MSE {best['mse_mean']:.2f} ± {best['mse_std']:.2f}"
 )
 st.caption(f"Baseline MSE (predict mean FRP): {baseline_mse:.2f}")
 
-tab_table, tab_map, tab_charts = st.tabs(["Table", "Fire Map", "Charts"])
+tab_table, tab_map = st.tabs(["Table", "Fire Map"])
 
 with tab_table:
     display = results.copy()
-    display.insert(2, "PCA", display["uses_pca"].map({True: "✓", False: "✗"}))
-    display = display.drop(columns=["uses_pca"])
+    pca_mask = display["uses_pca"].tolist()
+    display = display.drop(columns=["uses_pca", "r2_mean", "r2_std"])
     display = display.rename(columns={
         "features": "Feature Set", "model": "Model",
         "mse_mean": "MSE", "mse_std": "MSE ±",
-        "r2_mean": "R²", "r2_std": "R² ±",
     })
 
     def highlight_pca(row):
-        if row["PCA"] == "✓":
-            return ["background-color: #e8f5e9"] * len(row)
+        idx = display.index.get_loc(row.name)
+        if pca_mask[idx]:
+            return ["background-color: #c8e6c9; color: #1b5e20"] * len(row)
         return [""] * len(row)
 
     st.dataframe(
         display.style
                .apply(highlight_pca, axis=1)
-               .format({"MSE": "{:.2f}", "MSE ±": "{:.2f}", "R²": "{:.3f}", "R² ±": "{:.3f}"}),
+               .format({"MSE": "{:.2f}", "MSE ±": "{:.2f}"}),
         use_container_width=True,
         height=530,
     )
-    st.caption("Green rows use PCA on satellite features.")
+    st.caption("Green rows use PCA on satellite features. Sorted by MSE ascending.")
 
 with tab_map:
     if firms_agg.empty:
@@ -267,77 +266,3 @@ with tab_map:
 
         st.caption("Grid cells colored yellow→red by mean FRP intensity. Dots = individual detections.")
         st_folium(fire_map, width="100%", height=500, returned_objects=[])
-
-with tab_charts:
-    st.subheader("R² vs MSE — all models")
-    st.caption("Top-left is best (high R², low MSE). Dashed line = baseline MSE.")
-
-    scatter_df = results.copy()
-    scatter_df["PCA"] = scatter_df["uses_pca"].map({True: "Uses PCA", False: "No PCA"})
-    fig1 = px.scatter(
-        scatter_df,
-        x="mse_mean", y="r2_mean",
-        color="features",
-        symbol="model",
-        error_x="mse_std",
-        error_y="r2_std",
-        labels={"mse_mean": "MSE (lower is better)", "r2_mean": "R²",
-                "features": "Feature Set", "model": "Model"},
-        hover_data={"features": True, "model": True,
-                    "mse_mean": ":.2f", "r2_mean": ":.3f",
-                    "mse_std": ":.2f", "r2_std": ":.3f"},
-    )
-    fig1.add_vline(x=baseline_mse, line_dash="dash", line_color="grey",
-                   annotation_text="baseline MSE", annotation_position="top right")
-    fig1.update_layout(legend=dict(orientation="h", yanchor="bottom", y=-0.5))
-    st.plotly_chart(fig1, use_container_width=True)
-
-    st.subheader("PCA impact per model")
-    st.caption("R² with vs without PCA for the same model and base features.")
-
-    pca_pairs = {"sat_raw": "sat_pca", "weather_sat_raw": "weather_sat_pca"}
-    rows = []
-    for raw_feat, pca_feat in pca_pairs.items():
-        for model_name in results["model"].unique():
-            raw_row = results[(results["features"] == raw_feat) & (results["model"] == model_name)]
-            pca_row = results[(results["features"] == pca_feat) & (results["model"] == model_name)]
-            if raw_row.empty or pca_row.empty:
-                continue
-            rows.append(dict(
-                model=model_name,
-                comparison=f"{raw_feat} → {pca_feat}",
-                r2_no_pca=float(raw_row["r2_mean"].iloc[0]),
-                r2_pca=float(pca_row["r2_mean"].iloc[0]),
-                delta=float(pca_row["r2_mean"].iloc[0]) - float(raw_row["r2_mean"].iloc[0]),
-            ))
-
-    if rows:
-        pca_df = pd.DataFrame(rows)
-        melted = pca_df.melt(
-            id_vars=["model", "comparison"],
-            value_vars=["r2_no_pca", "r2_pca"],
-            var_name="version", value_name="R²",
-        )
-        melted["version"] = melted["version"].map({"r2_no_pca": "Without PCA", "r2_pca": "With PCA"})
-        melted["label"] = melted["model"] + " / " + melted["comparison"]
-
-        fig2 = px.bar(
-            melted,
-            x="label", y="R²",
-            color="version",
-            barmode="group",
-            color_discrete_map={"Without PCA": "#f4a261", "With PCA": "#2a9d8f"},
-            labels={"label": "Model / Feature Set"},
-            title="R² with vs without PCA (same model, same base features)",
-        )
-        fig2.update_layout(xaxis_tickangle=-30,
-                           legend=dict(orientation="h", yanchor="bottom", y=-0.4))
-        st.plotly_chart(fig2, use_container_width=True)
-
-        st.subheader("R² gain from adding PCA")
-        delta_df = pca_df[["model", "comparison", "delta"]].copy()
-        delta_df["delta"] = delta_df["delta"].round(4)
-        delta_df.columns = ["Model", "Feature Set Pair", "ΔR² (PCA − Raw)"]
-        st.dataframe(delta_df, use_container_width=True)
-    else:
-        st.info("Need satellite data to compute PCA impact. Landsat scenes may be missing.")

@@ -1,3 +1,11 @@
 .venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 .env
-pipeline.py
+.DS_Store
+figures/
+*.csv
+*.log
+graphs.py

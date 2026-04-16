@@ -1,10 +1,16 @@
-import requests
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
 import numpy as np
 import pandas as pd
-from rasterio.io import MemoryFile
+import rasterio
+import requests
+from rasterio.enums import Resampling
 
 STAC_SEARCH = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
 SAS_SIGN = "https://planetarycomputer.microsoft.com/api/sas/v1/sign"
+
+THUMB = 256
 
 _RENAME = {
     "ndvi_mean": "NDVI_mean",
@@ -13,6 +19,11 @@ _RENAME = {
     "nir_mean":  "B5_mean",
     "swir_mean": "B7_mean",
 }
+
+os.environ.setdefault("GDAL_HTTP_MERGE_CONSECUTIVE_RANGES", "YES")
+os.environ.setdefault("GDAL_HTTP_MULTIPLEX", "YES")
+os.environ.setdefault("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR")
+os.environ.setdefault("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.tiff")
 
 
 def search_landsat(bbox, start_date, end_date, max_cloud=20, limit=5):
@@ -37,15 +48,14 @@ def sign_url(href):
     return resp.json()["href"]
 
 
-def read_band(href, band_name):
-    signed = sign_url(href)
-    print(f"  Downloading {band_name} ...", end=" ", flush=True)
-    resp = requests.get(signed)
-    resp.raise_for_status()
-    print(f"{len(resp.content) // 1024} KB")
-    with MemoryFile(resp.content) as mf:
-        with mf.open() as ds:
-            return ds.read(1).astype(np.float32)
+def read_band(signed_url, band_name):
+    with rasterio.open(signed_url) as ds:
+        data = ds.read(
+            1,
+            out_shape=(THUMB, THUMB),
+            resampling=Resampling.average,
+        ).astype(np.float32)
+    return data
 
 
 def compute_ndvi(nir, red):
@@ -58,9 +68,19 @@ def compute_nbr(nir, swir):
 
 def get_vegetation_features(scene):
     assets = scene["assets"]
-    red  = read_band(assets["red"]["href"],    "red")
-    nir  = read_band(assets["nir08"]["href"],  "nir08")
-    swir = read_band(assets["swir16"]["href"], "swir16")
+
+    red_url  = sign_url(assets["red"]["href"])
+    nir_url  = sign_url(assets["nir08"]["href"])
+    swir_url = sign_url(assets["swir16"]["href"])
+
+    # download the 3 bands in parallel
+    with ThreadPoolExecutor(max_workers=3) as ex:
+        f_red  = ex.submit(read_band, red_url,  "red")
+        f_nir  = ex.submit(read_band, nir_url,  "nir08")
+        f_swir = ex.submit(read_band, swir_url, "swir16")
+        red  = f_red.result()
+        nir  = f_nir.result()
+        swir = f_swir.result()
 
     ndvi = compute_ndvi(nir, red)
     nbr  = compute_nbr(nir, swir)
