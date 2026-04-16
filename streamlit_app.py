@@ -22,9 +22,8 @@ load_dotenv()
 
 st.set_page_config(page_title="Wildfire Intensity Predictor", layout="wide")
 st.title("Wildfire Intensity Prediction Tool")
-st.caption("SI 465 Final Project — predicts weekly Fire Radiative Power using weather + satellite data")
+st.caption("Predicts weekly Fire Radiative Power using weather + satellite data")
 
-# use unbound keys so we can freely update them from the map drawing
 for k, v in [("bbox_west", -124.0), ("bbox_east", -119.0),
              ("bbox_south", 36.0),  ("bbox_north", 42.0)]:
     if k not in st.session_state:
@@ -55,8 +54,9 @@ def cached_power(bbox, start_str, end_str, resolution):
 
 
 @st.cache_data(show_spinner=False)
-def cached_landsat(bbox, start_str, end_str, max_cloud, limit):
-    return fetch_landsat_features(bbox, start_str, end_str, max_cloud=max_cloud, limit=limit)
+def cached_landsat(bbox, start_str, end_str, max_cloud, limit, resolution):
+    return fetch_landsat_features(bbox, start_str, end_str,
+                                  max_cloud=max_cloud, limit=limit, resolution=resolution)
 
 
 def frp_to_hex(frp, vmin, vmax):
@@ -81,9 +81,9 @@ with st.sidebar:
     end_date   = st.date_input("End date",   value=pd.to_datetime("2024-10-31"))
 
     st.header("Options")
-    resolution    = st.selectbox("Grid resolution (degrees)", [1.0, 0.5, 2.0])
-    max_cloud     = st.slider("Max Landsat cloud cover %", 0, 100, 20)
-    landsat_limit = st.number_input("Max Landsat scenes", value=10, min_value=1, max_value=50)
+    resolution    = st.selectbox("Grid resolution (degrees)", [0.5, 1.0, 2.0])
+    max_cloud     = st.slider("Max Landsat cloud cover %", 0, 100, 50)
+    landsat_limit = st.number_input("Max Landsat scenes", value=30, min_value=1, max_value=50)
 
     st.divider()
     map_key   = os.environ.get("MAP_KEY", "")
@@ -163,7 +163,7 @@ with st.spinner("Fetching NASA POWER weather..."):
 
 with st.spinner("Fetching Landsat vegetation scenes..."):
     try:
-        landsat_raw = cached_landsat(bbox, start_str, end_str, max_cloud, int(landsat_limit))
+        landsat_raw = cached_landsat(bbox, start_str, end_str, max_cloud, int(landsat_limit), RES)
         c3.metric("Landsat Scenes", len(landsat_raw))
     except Exception as e:
         c3.warning(f"Landsat skipped: {e}")
@@ -215,6 +215,7 @@ with tab_table:
     display = display.drop(columns=["uses_pca", "r2_mean", "r2_std"])
     display = display.rename(columns={
         "features": "Feature Set", "model": "Model",
+        "n_samples": "N",
         "mse_mean": "MSE", "mse_std": "MSE ±",
     })
 

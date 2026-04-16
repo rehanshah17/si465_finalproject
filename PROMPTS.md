@@ -13,3 +13,5 @@
 - why wont the threadpool workers join the data correcly
 
 - Why does adding threadpool workers for Landsat not make it faster? is there another way?
+
+- landsat data is ordered differently especially with different time zones, what is the best way to be able ot clean all the data firms, landsat, and powers so that I can have one big merged table?

@@ -94,17 +94,15 @@ def get_vegetation_features(scene):
     }
 
 
-def fetch_landsat_features(bbox, start_date, end_date, max_cloud=20, limit=5):
+def fetch_landsat_features(bbox, start_date, end_date, max_cloud=20, limit=5, resolution=0.5):
     scenes = search_landsat(list(bbox), start_date, end_date, max_cloud, limit)
 
     rows = []
     for scene in scenes:
         scene_bbox = scene.get("bbox", [])
-        if len(scene_bbox) == 4:
-            lat = (scene_bbox[1] + scene_bbox[3]) / 2
-            lon = (scene_bbox[0] + scene_bbox[2]) / 2
-        else:
-            lat, lon = None, None
+        if len(scene_bbox) != 4:
+            print(f"  Skipped scene {scene.get('id', '?')}: no bbox")
+            continue
 
         dt_str = scene["properties"].get("datetime", "")
         date = pd.to_datetime(dt_str[:10]) if dt_str else None
@@ -115,15 +113,34 @@ def fetch_landsat_features(bbox, start_date, end_date, max_cloud=20, limit=5):
             print(f"  Skipped scene {scene.get('id', '?')}: {exc}")
             continue
 
-        row = {"latitude": lat, "longitude": lon, "date": date}
-        row.update({_RENAME.get(k, k): v for k, v in feats.items()})
-        rows.append(row)
+        west, south, east, north = scene_bbox
+        # Clip to the requested bbox so we don't emit cells outside the study area
+        west  = max(west,  bbox[0])
+        south = max(south, bbox[1])
+        east  = min(east,  bbox[2])
+        north = min(north, bbox[3])
+
+        # All grid-cell centres inside the (clipped) scene footprint
+        lats = np.arange(np.ceil(south / resolution) * resolution,
+                         north + resolution * 0.01, resolution)
+        lons = np.arange(np.ceil(west  / resolution) * resolution,
+                         east  + resolution * 0.01, resolution)
+
+        renamed = {_RENAME.get(k, k): v for k, v in feats.items()}
+        for lat in lats:
+            for lon in lons:
+                row = {"latitude": round(float(lat), 4),
+                       "longitude": round(float(lon), 4),
+                       "date": date}
+                row.update(renamed)
+                rows.append(row)
 
     if not rows:
         return pd.DataFrame(columns=["latitude", "longitude", "date",
                                      "NDVI_mean", "NBR_mean",
                                      "B4_mean", "B5_mean", "B7_mean"])
-    return pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
+    return df.drop_duplicates(subset=["latitude", "longitude", "date"])
 
 
 if __name__ == "__main__":
