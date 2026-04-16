@@ -1,13 +1,21 @@
 import requests
 import numpy as np
+import pandas as pd
 from rasterio.io import MemoryFile
 
 STAC_SEARCH = "https://planetarycomputer.microsoft.com/api/stac/v1/search"
-SAS_SIGN    = "https://planetarycomputer.microsoft.com/api/sas/v1/sign"
+SAS_SIGN = "https://planetarycomputer.microsoft.com/api/sas/v1/sign"
+
+_RENAME = {
+    "ndvi_mean": "NDVI_mean",
+    "nbr_mean":  "NBR_mean",
+    "red_mean":  "B4_mean",
+    "nir_mean":  "B5_mean",
+    "swir_mean": "B7_mean",
+}
 
 
 def search_landsat(bbox, start_date, end_date, max_cloud=20, limit=5):
-    """Search Planetary Computer STAC for Landsat C2 L2 scenes."""
     payload = {
         "collections": ["landsat-c2-l2"],
         "bbox": bbox,
@@ -18,21 +26,18 @@ def search_landsat(bbox, start_date, end_date, max_cloud=20, limit=5):
     resp = requests.post(STAC_SEARCH, json=payload,
                          headers={"Content-Type": "application/json"})
     resp.raise_for_status()
-    data = resp.json()
-    features = data.get("features", [])
+    features = resp.json().get("features", [])
     print(f"Found {len(features)} scene(s)")
     return features
 
 
 def sign_url(href):
-    """Get a short-lived signed (SAS) URL for a Planetary Computer asset."""
     resp = requests.get(SAS_SIGN, params={"href": href})
     resp.raise_for_status()
     return resp.json()["href"]
 
 
 def read_band(href, band_name):
-    """Sign, download, and read a single GeoTIFF band into a float array."""
     signed = sign_url(href)
     print(f"  Downloading {band_name} ...", end=" ", flush=True)
     resp = requests.get(signed)
@@ -52,7 +57,6 @@ def compute_nbr(nir, swir):
 
 
 def get_vegetation_features(scene):
-    """Return a dict of spectral statistics for one STAC scene."""
     assets = scene["assets"]
     red  = read_band(assets["red"]["href"],    "red")
     nir  = read_band(assets["nir08"]["href"],  "nir08")
@@ -64,16 +68,48 @@ def get_vegetation_features(scene):
     return {
         "ndvi_mean": round(float(np.nanmean(ndvi)), 4),
         "nbr_mean":  round(float(np.nanmean(nbr)),  4),
-        "red_mean":  round(float(np.nanmean(red)),   4),
-        "nir_mean":  round(float(np.nanmean(nir)),   4),
-        "swir_mean": round(float(np.nanmean(swir)),  4),
+        "red_mean":  round(float(np.nanmean(red)),  4),
+        "nir_mean":  round(float(np.nanmean(nir)),  4),
+        "swir_mean": round(float(np.nanmean(swir)), 4),
     }
 
 
+def fetch_landsat_features(bbox, start_date, end_date, max_cloud=20, limit=5):
+    scenes = search_landsat(list(bbox), start_date, end_date, max_cloud, limit)
+
+    rows = []
+    for scene in scenes:
+        scene_bbox = scene.get("bbox", [])
+        if len(scene_bbox) == 4:
+            lat = (scene_bbox[1] + scene_bbox[3]) / 2
+            lon = (scene_bbox[0] + scene_bbox[2]) / 2
+        else:
+            lat, lon = None, None
+
+        dt_str = scene["properties"].get("datetime", "")
+        date = pd.to_datetime(dt_str[:10]) if dt_str else None
+
+        try:
+            feats = get_vegetation_features(scene)
+        except Exception as exc:
+            print(f"  Skipped scene {scene.get('id', '?')}: {exc}")
+            continue
+
+        row = {"latitude": lat, "longitude": lon, "date": date}
+        row.update({_RENAME.get(k, k): v for k, v in feats.items()})
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame(columns=["latitude", "longitude", "date",
+                                     "NDVI_mean", "NBR_mean",
+                                     "B4_mean", "B5_mean", "B7_mean"])
+    return pd.DataFrame(rows)
+
+
 if __name__ == "__main__":
-    BBOX       = [-122.5, 38.5, -121.5, 39.5]
+    BBOX = [-122.5, 38.5, -121.5, 39.5]
     START_DATE = "2024-07-01"
-    END_DATE   = "2024-07-31"
+    END_DATE = "2024-07-31"
 
     print(f"Searching Landsat C2 L2 scenes over {BBOX}")
     print(f"Date range : {START_DATE} -> {END_DATE}")
@@ -84,14 +120,14 @@ if __name__ == "__main__":
     all_features = []
     for scene in scenes:
         scene_id = scene["id"]
-        date     = scene["properties"].get("datetime", "unknown")
-        cloud    = scene["properties"].get("eo:cloud_cover", "?")
+        date  = scene["properties"].get("datetime", "unknown")
+        cloud = scene["properties"].get("eo:cloud_cover", "?")
         print(f"\nScene : {scene_id}")
         print(f"Date  : {date}  |  Cloud cover: {cloud}%")
         try:
             feats = get_vegetation_features(scene)
             feats["scene_id"] = scene_id
-            feats["date"]     = date
+            feats["date"] = date
             all_features.append(feats)
             print(f"  NDVI mean : {feats['ndvi_mean']}")
             print(f"  NBR  mean : {feats['nbr_mean']}")
@@ -103,6 +139,6 @@ if __name__ == "__main__":
 
     print(f"\n{'='*60}")
     print(f"DONE: {len(all_features)} / {len(scenes)} scenes processed")
-    print("="*60)
+    print("=" * 60)
     for f in all_features:
         print(f)

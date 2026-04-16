@@ -10,9 +10,9 @@ PARAMS = "T2M,RH2M,WS2M,PRECTOTCORR,ALLSKY_SFC_SW_DWN"
 
 
 def fetch_power_data(bbox, start_date, end_date, resolution=0.5):
-    lat_min, lon_min, lat_max, lon_max = bbox
-    lats = np.arange(lat_min + resolution / 2, lat_max, resolution)
-    lons = np.arange(lon_min + resolution / 2, lon_max, resolution)
+    west, south, east, north = bbox
+    lats = np.arange(south + resolution / 2, north, resolution)
+    lons = np.arange(west + resolution / 2, east, resolution)
     cells = list(product(lats, lons))
 
     print(f"  Pulling POWER for {len(cells)} grid cells...")
@@ -58,7 +58,7 @@ def fetch_power_data(bbox, start_date, end_date, resolution=0.5):
 
 
 if __name__ == "__main__":
-    bbox = (36.0, -124.0, 42.0, -119.0)
+    bbox = (-124.0, 36.0, -119.0, 42.0)
     df = fetch_power_data(bbox, "20240701", "20240710", resolution=1.0)
     print(df.shape)
     print(df.head())
