@@ -38,3 +38,9 @@ df = firms_agg.merge(weather_agg, on=["lat_cell", "lon_cell", "week"], how="inne
 - If I wanted to compare regssion vs pca vs randomforest and want to create a pipeline, what test hyperparameter values would be appropriate?
 
 - is there anything that I can do so my python file does not have to redownload the data each time without a sqlite file or json file I want to use streamlit?
+
+- why does cached data not populate on first hit?
+
+- why does drawing on streamlit box not work correctly
+
+- why wont the threadpool workers join the data correcly
